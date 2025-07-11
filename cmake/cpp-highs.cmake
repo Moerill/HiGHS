@@ -131,6 +131,7 @@ install(FILES "${HIGHS_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/highs.pc"
 # e.g.:
 # highs_cxx_test(foo.cc)
 function(highs_cxx_test FILE_NAME)
+	find_package(Boost CONFIG REQUIRED)
   message(STATUS "Configuring test ${FILE_NAME}: ...")
   get_filename_component(TEST_NAME ${FILE_NAME} NAME_WE)
   get_filename_component(COMPONENT_DIR ${FILE_NAME} DIRECTORY)
@@ -149,8 +150,9 @@ function(highs_cxx_test FILE_NAME)
   target_sources(${TEST_NAME} PRIVATE ${FILE_NAME})
   target_include_directories(${TEST_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-  target_compile_features(${TEST_NAME} PRIVATE cxx_std_11)
-  target_link_libraries(${TEST_NAME} PRIVATE ${PROJECT_NAMESPACE}::highs)
+  target_compile_features(${TEST_NAME} PRIVATE cxx_std_20)
+  target_link_libraries(${TEST_NAME} PRIVATE ${PROJECT_NAMESPACE}::highs )
+	target_include_directories(${TEST_NAME} PRIVATE ${Boost_INCLUDE_DIRS})
 
   # include(GNUInstallDirs)
   # if(APPLE)
