@@ -132,6 +132,7 @@ install(FILES "${HIGHS_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/highs.pc"
 # highs_cxx_test(foo.cc)
 function(highs_cxx_test FILE_NAME)
 	find_package(Boost CONFIG REQUIRED)
+	find_package(TBB REQUIRED COMPONENTS tbb)
   message(STATUS "Configuring test ${FILE_NAME}: ...")
   get_filename_component(TEST_NAME ${FILE_NAME} NAME_WE)
   get_filename_component(COMPONENT_DIR ${FILE_NAME} DIRECTORY)
@@ -152,6 +153,7 @@ function(highs_cxx_test FILE_NAME)
 
   target_compile_features(${TEST_NAME} PRIVATE cxx_std_20)
   target_link_libraries(${TEST_NAME} PRIVATE ${PROJECT_NAMESPACE}::highs )
+  target_link_libraries(${TEST_NAME} PRIVATE tbb )
 	target_include_directories(${TEST_NAME} PRIVATE ${Boost_INCLUDE_DIRS})
 
   # include(GNUInstallDirs)

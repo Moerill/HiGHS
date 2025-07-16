@@ -10,6 +10,7 @@
 #include <chrono>
 #include <thread>
 #include <execution>
+#include <fstream>
 
 
 #include <boost/graph/adjacency_list.hpp>
@@ -47,7 +48,8 @@ class Timer {
             else
                 printf("\ttook %.2fs\n", dt / 1'000'000.);
         }
-        return dt;
+        return std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
+                .count();
     }
 
   private:
@@ -76,7 +78,7 @@ private:
     bool m_found;
 };
 
-void create_LP(HighsLp& LP, const int num_sinks=10, const int num_sources=10, const int num_intermediates=160, const int num_source_connections=60, const int num_commodities = 100, const bool use_int=true, const bool multithreading = true, const int seed=42) {
+unsigned int create_LP(HighsLp& LP, const int num_intermediates=160, const bool use_int=true, const bool multithreading = true, const int num_sinks=10, const int num_sources=10, const int num_source_connections=60, const int num_commodities = 100, const int seed=42) {
 	std::random_device rd; // ignore
 	std::srand(seed);
 	auto gen = std::mt19937{seed};
@@ -87,6 +89,7 @@ void create_LP(HighsLp& LP, const int num_sinks=10, const int num_sources=10, co
 	int num_nodes = num_sinks + num_sources + num_intermediates;
 
 
+	cout << "Init problem\n";
 	auto t_init_problem = timer.start();
 
 
@@ -136,6 +139,7 @@ void create_LP(HighsLp& LP, const int num_sinks=10, const int num_sources=10, co
 		}
 	}
 
+	auto t_graph = timer.start();
 	// Find reachable sinks for each node using boost graph and BFS
 	std::vector<std::vector<int>> source_to_reachable_sinks(sources.size()); 	
 	auto edges_keys = std::views::keys(edges);
@@ -160,6 +164,9 @@ void create_LP(HighsLp& LP, const int num_sinks=10, const int num_sources=10, co
 			source_to_reachable_sinks[i] = reachables;
 		}
 	}
+	cout << "path cheching:";
+	timer.stop(t_graph, true);
+	cout << "\n";
 
 	// commodities with reachable sinks only
 	std::vector<std::pair<int, int>> commodities;
@@ -180,7 +187,6 @@ void create_LP(HighsLp& LP, const int num_sinks=10, const int num_sources=10, co
 	std::vector<int> demand(commodities.size());
 	std::generate(demand.begin(), demand.end(), [&]() { return cost_distrib(gen) + 4;});
 
-	cout << "Init problem\n";
 	timer.stop(t_init_problem, true);
 
 	// Build HiGHS LP
@@ -294,7 +300,7 @@ void create_LP(HighsLp& LP, const int num_sinks=10, const int num_sources=10, co
 		std::vector<double> demands(commodities.size() * nodes.size());
 		std::vector<int> k_counter(commodities.size());
 		std::iota(k_counter.begin(), k_counter.end(), 0);
-		std::for_each(std::execution::par, k_counter.begin(), k_counter.end(), [&] (int k) {
+		std::for_each(std::execution::par_unseq, k_counter.begin(), k_counter.end(), [&] (int k) {
 			auto [src, tgt] = commodities.at(k);
 			for (int node_idx = 0; node_idx < nodes.size(); node_idx++) {
 				auto n = nodes.at(node_idx);
@@ -375,83 +381,113 @@ void create_LP(HighsLp& LP, const int num_sinks=10, const int num_sources=10, co
 	LP.a_matrix_.value_ = col_value;
 
 	cout << "Init LP\n";
-	timer.stop(t_init_LP, true);
+	t_init_LP = timer.stop(t_init_LP, true);
 
 	if (use_int) {
 		LP.integrality_.resize(LP.num_col_);
 		for (int i = 0; i < edges.size() + intermediates.size(); i++)
 				LP.integrality_[i] = HighsVarType::kInteger;
 	}
+	return t_init_LP;
 }
 
 int main(int argc, char *argv[]) {
-	HighsModel model;
-	auto& LP = model.lp_;
-	Timer timer;
 
-	create_LP(LP);
+	std::ofstream f_out;
+	f_out.open("benchs_with_cutting.csv", std::ios::app);
+	f_out << "t_init,t_solve,objective value,num_intermediates,use ints,multithreading\n";
+	f_out.flush();
+	for (int j = 7; j < 15; j++) {
+	// 	for (int i = 1; i < 2; i++) {
+			HighsModel model;
+			auto& LP = model.lp_;
+			Timer timer;
+
+			// for (int i = 7; i < 15; i++) {
+			// 	create_LP(LP, 1<<i);
+			// }
+			// return 1;
+			bool multithreading = 1;
+			bool use_int = 1;
+			// int num_intermediates = 160;
+			int num_intermediates = 1<<j;
+
+			cout << "--------  --------\n";
+			cout << "-------- --------\n";
+			cout << "-------- creating LP with " << num_intermediates << "intermediates --------\n";
+
+			auto t_init_LP = create_LP(LP, num_intermediates, use_int, multithreading);
+
+			multithreading=false;
+			Highs highs;
+			HighsStatus return_status;
+
+			//
+			// Pass the model to HiGHS
+			return_status = highs.passModel(model);
+			const HighsLp& lp = highs.getLp();
+			assert(return_status == HighsStatus::kOk);
+			std::string options_file = "highs_options";
+			highs.readOptions(options_file);
+
+			// if (multithreading)
+			// 	highs.setOptionValue("parallel", "on");
+			//
+			// highs.setOptionValue("solver", "ipm");
+			auto t_solve = timer.start();
+			cout << "Solving..." << endl;
+
+			return_status = highs.run();
+			assert(return_status == HighsStatus::kOk);
+
+			t_solve = timer.stop(t_solve, true);
+
+			const HighsModelStatus& model_status = highs.getModelStatus();
+			assert(model_status == HighsModelStatus::kOptimal);
+			cout << "Model status: " << highs.modelStatusToString(model_status) << endl;
+			//
+			// Get the solution information
+			const HighsInfo& info = highs.getInfo();
+			cout << "Simplex iteration count: " << info.simplex_iteration_count << endl;
+			cout << "Objective function value: " << info.objective_function_value << endl;
+			cout << "Primal  solution status: "
+					 << highs.solutionStatusToString(info.primal_solution_status) << endl;
+			cout << "Dual    solution status: "
+					 << highs.solutionStatusToString(info.dual_solution_status) << endl;
+			cout << "Basis: " << highs.basisValidityToString(info.basis_validity) << endl;
 
 
-  Highs highs;
-  HighsStatus return_status;
-
-  //
-  // Pass the model to HiGHS
-  return_status = highs.passModel(model);
-	const HighsLp& lp = highs.getLp();
-  assert(return_status == HighsStatus::kOk);
-	std::string options_file = "highs_options";
-	highs.readOptions(options_file);
-
-	// if (multithreading)
-	// 	highs.setOptionValue("parallel", "on");
-	//
-	// highs.setOptionValue("solver", "ipm");
-	auto t_solve = timer.start();
-	cout << "Solving..." << endl;
-
-  return_status = highs.run();
-  assert(return_status == HighsStatus::kOk);
-
-	timer.stop(t_solve, true);
-
-  const HighsModelStatus& model_status = highs.getModelStatus();
-  assert(model_status == HighsModelStatus::kOptimal);
-  cout << "Model status: " << highs.modelStatusToString(model_status) << endl;
-  //
-  // Get the solution information
-  const HighsInfo& info = highs.getInfo();
-  cout << "Simplex iteration count: " << info.simplex_iteration_count << endl;
-  cout << "Objective function value: " << info.objective_function_value << endl;
-  cout << "Primal  solution status: "
-       << highs.solutionStatusToString(info.primal_solution_status) << endl;
-  cout << "Dual    solution status: "
-       << highs.solutionStatusToString(info.dual_solution_status) << endl;
-  cout << "Basis: " << highs.basisValidityToString(info.basis_validity) << endl;
-
-
-  const bool has_values = info.primal_solution_status;
-  const bool has_duals = info.dual_solution_status;
-  const bool has_basis = info.basis_validity;
-  //
-  // Get the solution values and basis
-  const HighsSolution& solution = highs.getSolution();
-  const HighsBasis& basis = highs.getBasis();
-  //
-  // Report the primal and solution values and basis
-  // for (int col = 0; col < 100; col++) {
-	// for (int col = 0; col < edges.size() + intermediates.size(); col++) {
-	// 	if (has_values) {
-	// 		auto val = solution.col_value[col];
-	// 		if (!((val > (1.f - 1e-3f) && val <= 1.f) || (std::abs(val) >= 0.f && std::abs(val) <= 1e-3f))) {
-	// 			cout << "Column " << col;
-	// 			if (has_values) cout << "; value = " << solution.col_value[col];
-	// 			if (has_duals) cout << "; dual = " << solution.col_dual[col];
-	// 			if (has_basis)
-	// 				cout << "; status: " << highs.basisStatusToString(basis.col_status[col]);
-	// 			cout << endl;
-	// 		}
+			const bool has_values = info.primal_solution_status;
+			const bool has_duals = info.dual_solution_status;
+			const bool has_basis = info.basis_validity;
+			//
+			// Get the solution values and basis
+			const HighsSolution& solution = highs.getSolution();
+			const HighsBasis& basis = highs.getBasis();
+			//
+			// Report the primal and solution values and basis
+			for (int col = 0; col < 100; col++) {
+			// for (int col = 0; col < edges.size() + intermediates.size(); col++) {
+				if (has_values) {
+					auto val = solution.col_value[col];
+					if (!((val > (1.f - 1e-3f) && val <= 1.f) || (std::abs(val) >= 0.f && std::abs(val) <= 1e-3f))) {
+						cout << "Column " << col;
+						if (has_values) cout << "; value = " << solution.col_value[col];
+						if (has_duals) cout << "; dual = " << solution.col_dual[col];
+						if (has_basis)
+							cout << "; status: " << highs.basisStatusToString(basis.col_status[col]);
+						cout << endl;
+					}
+				}
+			 }
+			f_out << t_init_LP << ",";
+			f_out << t_solve << ",";
+			f_out << info.objective_function_value << ",";
+			f_out << num_intermediates << "," << use_int << "," << multithreading << "\n";
+			f_out.flush();
+			
 	// 	}
-	//  }
+	}
+	f_out.close();
 	return 0;
 }

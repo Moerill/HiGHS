@@ -70,6 +70,7 @@ void HighsMipSolver::run() {
   modelstatus_ = HighsModelStatus::kNotset;
 
   if (submip) {
+		return; // changed
     analysis_.analyse_mip_time = false;
   } else {
     analysis_.timer_ = &this->timer_;
@@ -233,6 +234,8 @@ restart:
   double upperLimLastCheck = mipdata_->upper_limit;
   double lowerBoundLastCheck = mipdata_->lower_bound;
   analysis_.mipTimerStart(kMipClockSearch);
+
+
   while (search.hasNode()) {
     // Possibly look for primal solution from the user
     if (!submip && callback_->user_callback &&
@@ -277,6 +280,8 @@ restart:
             analysis_.mipTimerStart(kMipClockDiveRandomizedRounding);
             mipdata_->heuristics.randomizedRounding(
                 mipdata_->lp.getLpSolver().getSolution().col_value);
+            // mipdata_->heuristics.simpleRounding(
+            //     mipdata_->lp.getLpSolver().getSolution().col_value);
             analysis_.mipTimerStop(kMipClockDiveRandomizedRounding);
           }
 
@@ -300,7 +305,16 @@ restart:
           analysis_.mipTimerStop(kMipClockDivePrimalHeuristics);
         }
       }
+			// changed
+			// stop if bound difference smaller tahn 0.005 ub
+			double lb;
+			double ub;
+			double gap = mipdata_->limitsToGap(mipdata_->lower_bound, mipdata_->upper_bound, lb, ub);
+			if ((ub - lb) < (0.01 * ub)) {
+				// 	std::cout << (static_cast<int>(orig_model_->sense_) * this->options_mip_->objective_bound) << std::endl;
 
+				break;
+			}
       considerHeuristics = false;
 
       if (mipdata_->domain.infeasible()) break;
@@ -501,11 +515,11 @@ restart:
       }
 
       if (doRestart) {
-        highsLogUser(options_mip_->log_options, HighsLogType::kInfo,
-                     "\nRestarting search from the root node\n");
-        mipdata_->performRestart();
-        analysis_.mipTimerStop(kMipClockSearch);
-        goto restart;
+        // highsLogUser(options_mip_->log_options, HighsLogType::kInfo,
+        //              "\nRestarting search from the root node\n");
+        // mipdata_->performRestart();
+        // analysis_.mipTimerStop(kMipClockSearch);
+        // // goto restart;
       }
     }  // if (!submip && mipdata_->num_nodes >= nextCheck))
 
@@ -517,6 +531,7 @@ restart:
     analysis_.mipTimerStart(kMipClockNodeSearch);
 
     while (!mipdata_->nodequeue.empty()) {
+			break; // changed
       // printf("popping node from nodequeue (length = %" HIGHSINT_FORMAT ")\n",
       // (HighsInt)nodequeue.size());
       assert(!search.hasNode());
